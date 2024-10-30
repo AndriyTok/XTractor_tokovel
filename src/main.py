@@ -1,9 +1,11 @@
 import re
 import sys
 import os
-import unicodedata
+# import unicodedata
 from collections import Counter
 from enum import Enum
+
+from PyQt5 import QtWidgets
 
 # Перевіримо, що ми включили всі необхідні класи
 from src.Mode import Mode  # Створений клас Mode
@@ -30,7 +32,7 @@ class Target(Enum):
 
 # Налаштування для розпізнавання кінця речення
 punctuation = '.!?。？！؟ | . !'
-sentence_endings = re.compile(r"(?<!\w\.\w.)(?<![А-Я][а-я]\.)(?<![А-Я]\.)(?<=\.|\?|\!|。|？|！|؟)\s+")
+sentence_endings = re.compile(r"(?<!\w\.\w.)(?<![А-Я][а-я]\.)(?<![А-Я]\.)(?<=[.?!。？！؟])\s+")
 
 
 def ngrams(arr, n, join_divider):
@@ -65,8 +67,7 @@ def bin(text, mode: Mode):
         if mode.lastNode.getTarget() == Target.EQUAL.name:
             return binare(char_ngrams, lambda x: x == mode.phrase)
         elif mode.lastNode.getTarget() == Target.FREQUENCY.name:
-            return binare(char_ngrams, lambda x: mode.getFrequencyFrom() <= char_counter.get(x,
-                                                                                             0) <= mode.getFrequencyTo() and not any(
+            return binare(char_ngrams, lambda x: mode.getFrequencyFrom() <= char_counter.get(x,0) <= mode.getFrequencyTo() and not any(
                 ch in mode.getStopSymbols() for ch in x))
         elif mode.lastNode.getTarget() == Target.FIRST.name:
             return binare(char_ngrams, lambda x: 1 if add_and_check_new(char_set, x) else 0)
@@ -115,5 +116,8 @@ def main():
             f.write(str(result)[1:-1])
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    app = QtWidgets.QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec_())
