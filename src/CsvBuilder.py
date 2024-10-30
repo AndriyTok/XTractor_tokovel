@@ -1,7 +1,7 @@
 class CsvBuilder:
     NEW_LINE = "\n"
 
-    def __init__(self, delimiter):
+    def __init__(self, delimiter=','):
         self.sb = []
         self.delimiter = delimiter
         self.is_on = True
@@ -39,3 +39,7 @@ class CsvBuilder:
     def turn_on(self):
         self.is_on = True
 
+    def write(self, file_path):
+        """Write the accumulated CSV data to a file."""
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(str(self))

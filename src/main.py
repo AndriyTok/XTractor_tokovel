@@ -1,18 +1,16 @@
-import re
-import sys
 import os
-# import unicodedata
+import sys
+import re
 from collections import Counter
 from enum import Enum
 
-from PyQt5 import QtWidgets
+from src.Chooser import Chooser
+from src.CsvBuilder import CsvBuilder
+from src.IOUtils import IOUtils
+from src.MainWindow import Node, ValueType, MainWindow
+from src.Mode import Mode
 
-# Перевіримо, що ми включили всі необхідні класи
-from src.Mode import Mode  # Створений клас Mode
-from src.MainWindow import MainWindow  # Включає клас MainWindow для інтерфейсу
 
-
-# Класи Level та Target для рівнів і цілей
 class Level(Enum):
     CHAR = 0
     LETTER = 1
@@ -30,9 +28,9 @@ class Target(Enum):
     FIRST = 6
 
 
-# Налаштування для розпізнавання кінця речення
-punctuation = '.!?。？！؟ | . !'
-sentence_endings = re.compile(r"(?<!\w\.\w.)(?<![А-Я][а-я]\.)(?<![А-Я]\.)(?<=[.?!。？！؟])\s+")
+# Punctuation and regex for sentence endings
+punctuation = '.!?。？！؟'
+sentence_endings = re.compile(r"(?<!\w\.\w.)(?<![А-Я][а-я]\.)(?<![А-Я]\.)(?<=\.|\?|\!|。|？|！|؟)\s+")
 
 
 def ngrams(arr, n, join_divider):
@@ -46,6 +44,8 @@ def binare(arr, expression):
     res = [0] * len(arr)
     for i, x in enumerate(arr):
         res[i] = (1, x) if expression(x) else (0, x)
+        if i % 1000 == 0:
+            print(f'{100 * (i / len(arr)):.2f}%')
     return res
 
 
@@ -55,69 +55,121 @@ def add_and_check_new(val_set, x):
     return len(val_set) > l
 
 
-def bin(text, mode: Mode):
-    text = re.sub(r'\s+', ' ', text)  # Замінює всі види пробілів одним пробілом
-    n = mode.getN() or 1  # Використовуємо `getN` з Mode
+def bin(text, level, target, sublevel=None, s='', ff=1, ft=1, ss=[], n=1, l=1):
+    text = re.sub(r'\s+', ' ', text)  # Replace all types of spaces with a single space
 
-    if mode.lastNode.getLevel() == Level.CHAR.name:
+    if level == Level.CHAR.name or level == Level.LETTER.name:
+        n = n if n > 0 else len(s) if s else 1
         char_ngrams = ngrams(text, n, "")
         char_set = set()
         char_counter = Counter(char_ngrams)
 
-        if mode.lastNode.getTarget() == Target.EQUAL.name:
-            return binare(char_ngrams, lambda x: x == mode.phrase)
-        elif mode.lastNode.getTarget() == Target.FREQUENCY.name:
-            return binare(char_ngrams, lambda x: mode.getFrequencyFrom() <= char_counter.get(x,0) <= mode.getFrequencyTo() and not any(
-                ch in mode.getStopSymbols() for ch in x))
-        elif mode.lastNode.getTarget() == Target.FIRST.name:
+        if target == Target.EQUAL.name:
+            return binare(char_ngrams, lambda x: x == s)
+        elif target == Target.FREQUENCY.name:
+            return binare(char_ngrams, lambda x: ff <= char_counter.get(x, 0) <= ft and not any(ch in ss for ch in x))
+        elif target == Target.FIRST.name:
             return binare(char_ngrams, lambda x: 1 if add_and_check_new(char_set, x) else 0)
 
-    elif mode.lastNode.getLevel() == Level.WORD.name:
+    elif level == Level.WORD.name:
+        n = n if n > 0 else len(str(s).split()) if s else 1
         clean_words = re.sub(r"[^\w" + re.escape(punctuation) + r"]+", " ", text).split()
         word_grams = ngrams(clean_words, n, " ")
         word_set = set()
         word_counter = Counter(word_grams)
 
-        if mode.lastNode.getTarget() == Target.FREQUENCY.name:
-            return binare(word_grams, lambda x: mode.getFrequencyFrom() <= word_counter.get(x,
-                                                                                            0) <= mode.getFrequencyTo() and not any(
-                ch in mode.getStopSymbols() for ch in x))
-        elif mode.lastNode.getTarget() == Target.LENGTH.name:
-            return binare(word_grams, lambda x: len(x.replace(" ", "")) == mode.getL())
+        if target == Target.EQUAL.name:
+            return binare(word_grams, lambda x: s == x)
+        elif target == Target.FREQUENCY.name:
+            return binare(word_grams, lambda x: ff <= word_counter.get(x, 0) <= ft and not any(ch in ss for ch in x))
+        elif target == Target.LENGTH.name:
+            return binare(word_grams, lambda x: len(re.sub(r"[^\w" + re.escape(punctuation) + r"]", "", x)) == l)
+        elif target == Target.STARTS.name:
+            return binare(word_grams, lambda x: x.startswith(s))
+        elif target == Target.CONTAINS.name:
+            return binare(word_grams, lambda x: s in x)
+        elif target == Target.ENDS.name:
+            return binare(word_grams, lambda x: x.endswith(s))
+        elif target == Target.FIRST.name:
+            return binare(word_grams, lambda x: 1 if add_and_check_new(word_set, x) else 0)
 
-    elif mode.lastNode.getLevel() == Level.SENTENCE.name:
+    elif level == Level.SENTENCE.name:
         sentences = sentence_endings.split(text)
+        if target == Target.CONTAINS.name:
+            return binare(sentences, lambda x: s in x)
+        elif target == Target.LENGTH.name:
+            return binare(sentences, lambda x: len(re.sub(r"[^\w" + re.escape(punctuation) + r"]", "", x)) == l)
 
-        if mode.lastNode.getTarget() == Target.CONTAINS.name:
-            return binare(sentences, lambda x: mode.phrase in x)
-        elif mode.lastNode.getTarget() == Target.LENGTH.name:
-            return binare(sentences, lambda x: len(x.split()) == mode.getL())
+
+def print_all(text, level, target, sublevel=None, s='', ff=1, ft=1, ss=[], n=1, l=0):
+    text = re.sub(r'\s+', ' ', text)
+    n = max(n, 1)
+    if level == Level.CHAR.name:
+        char_counter = Counter(text)
+        return [char_counter.get(ch, 0) for ch in text]
+    elif level == Level.WORD.name:
+        clean_words = re.sub(r"[^\w" + re.escape(punctuation) + r"]+", " ", text).split()
+        word_grams = ngrams(clean_words, n, " ")
+        word_counter = Counter(word_grams)
+        return [len(word) for word in word_grams]
+
+
+def bin_to_dt(bin_arr):
+    ix = [i for i, x in enumerate(bin_arr) if x == 1]
+    return [ix[i + 1] - ix[i] for i in range(len(ix) - 1)]
 
 
 def main():
-    # Встановлення параметрів через інтерфейс класу Mode
-    mode = Mode()
-    mode.phrase = 'текст для обробки'  # Вкажіть фразу для обробки
+    chooser = Chooser()  # Create an instance of Chooser
+    root = chooser.get_root()  # Get the Tk root window
 
-    # Зчитуємо шлях до тексту, якщо вказаний
-    params = {'path': '', 'mode': 'print'}
-    for i in range(len(sys.argv)):
-        if sys.argv[i] == '-i':
-            params['path'] = sys.argv[i + 1]
+    # Get the file path to open
+    params = {
+        'path': chooser.get_file_path(),
+        'level': '',
+        'target': '',
+        'sublevel': None,
+        'symbol': '',
+        'freq_from': 1,
+        'freq_to': 1,
+        'stop_symbols': [],
+        'n': 1,
+        'l': 1,
+        'mode': 'print'
+    }
 
-    # Завантаження тексту
-    with open(os.path.normpath(params['path']), "r", encoding='utf-8') as file:
-        text = file.read().lower()
+    if not params['path']:  # Check if the user canceled the file selection
+        print("No file selected.")
+        return
 
-    # Виконуємо обробку тексту відповідно до режиму
+    # Use IOUtils to read the file
+    text = IOUtils.read_file(os.path.normpath(params['path'])).lower()
+
+    # Instantiate MainWindow with the Tk root
+    main_window = MainWindow(root)  # Pass the root to MainWindow
+
     if params['mode'] == 'print':
-        result = bin(text, mode)
-        with open("output.csv", "w+", encoding='utf-8') as f:
-            f.write(str(result)[1:-1])
+        res = print_all(text, params['level'], params['target'], params['sublevel'], params['symbol'], params['freq_from'], params['freq_to'], params['stop_symbols'], params['n'], params['l'])
+
+        if res is None:  # Check if res is None before proceeding
+            print("No results returned.")
+            return
+
+        # Use CsvBuilder to write the CSV
+        csv_builder = CsvBuilder(',')  # Initialize with default comma delimiter
+        for item in res:
+            csv_builder.add(item).new_line()  # Add items and create new lines
+        output_path = chooser.get_file_to_save_csv()  # Get file path for CSV
+        if output_path:
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(str(csv_builder))  # Write to CSV file
+
+        main_window.display_results(res)  # Display results in the GUI
+
+    # Start the Tkinter main loop
+    root.mainloop()
 
 
-if __name__ == "__main__":
-    app = QtWidgets.QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec_())
+if __name__ == '__main__':
+    sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
+    main()
